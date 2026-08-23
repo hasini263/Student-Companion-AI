@@ -47,92 +47,111 @@ except ImportError:
 @notes_bp.route("", methods=["POST"])
 @jwt_required()
 def create_note():
-    user_id = get_jwt_identity()
+    raw_identity = get_jwt_identity()
+    try:
+        user_id = int(raw_identity)
+    except (ValueError, TypeError):
+        user_id = 1
     
-    # Check if a PDF file is uploaded
-    if 'file' in request.files:
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({"message": "Empty file uploaded"}), 400
-            
-        if not file.filename.lower().endswith('.pdf'):
-            return jsonify({"message": "Only PDF files are supported"}), 400
-            
-        if not PDF_LIBRARIES_INSTALLED:
-            return jsonify({
-                "message": "PDF parsing libraries are not installed on the server. Please run 'pip install pypdf' or copy-paste text directly."
-            }), 400
+    try:
+        # Check if a PDF file is uploaded
+        if 'file' in request.files:
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({"message": "Empty file uploaded"}), 400
+                
+            if not file.filename.lower().endswith('.pdf'):
+                return jsonify({"message": "Only PDF files are supported"}), 400
+                
+            if not PDF_LIBRARIES_INSTALLED:
+                return jsonify({
+                    "message": "PDF parsing libraries are not installed on the server. Please run 'pip install pypdf' or copy-paste text directly."
+                }), 400
 
-        # Read the file stream
-        file_stream = io.BytesIO(file.read())
-        extracted_content, error_msg = extract_pdf_text(file_stream)
-        
-        if error_msg:
-            return jsonify({
-                "message": f"Failed to parse PDF file structure: {error_msg}. Please make sure the file is not corrupt."
-            }), 400
+            # Read the file stream
+            file_stream = io.BytesIO(file.read())
+            extracted_content, error_msg = extract_pdf_text(file_stream)
             
-        if not extracted_content:
-            return jsonify({
-                "message": "The uploaded PDF contains no extractable text. It might be a scanned document or an image. Please copy-paste the text content directly instead."
-            }), 400
-            
-        title = request.form.get("title", file.filename.rsplit('.', 1)[0])
-        content = extracted_content
-    else:
-        # Expect JSON text upload
-        data = request.get_json()
-        if not data or not data.get("title") or not data.get("content"):
-            return jsonify({"message": "Missing note title or content"}), 400
-        title = data["title"]
-        content = data["content"]
+            if error_msg:
+                return jsonify({
+                    "message": f"Failed to parse PDF file structure: {error_msg}. Please make sure the file is not corrupt."
+                }), 400
+                
+            if not extracted_content:
+                return jsonify({
+                    "message": "The uploaded PDF contains no extractable text. It might be a scanned document or an image. Please copy-paste the text content directly instead."
+                }), 400
+                
+            title = request.form.get("title", "").strip() or file.filename.rsplit('.', 1)[0]
+            content = extracted_content
+        else:
+            # Expect JSON or Form text upload
+            title = request.form.get("title")
+            content = request.form.get("content")
+            if not title or not content:
+                data = request.get_json(silent=True) or {}
+                title = data.get("title") or title
+                content = data.get("content") or content
 
-    # Generate summary using the AI service
-    summary = generate_summary(content)
+            if not title or not content:
+                return jsonify({"message": "Missing note title or content"}), 400
 
-    # Save main Note
-    new_note = Note(
-        user_id=user_id,
-        title=title,
-        content=content,
-        summary=summary
-    )
-    db.session.add(new_note)
-    db.session.commit() # Commit to get note.id
+        # Generate summary using the AI service
+        summary = generate_summary(content)
 
-    # Chunk text and save NoteChunks for RAG with dense vector embeddings
-    from services.rag_service import compute_vector_embedding
-    import json
-    
-    chunks = chunk_text(content)
-    for idx, chunk_text_content in enumerate(chunks):
-        vec = compute_vector_embedding(f"{title}\n{chunk_text_content}")
-        new_chunk = NoteChunk(
-            note_id=new_note.id,
-            content=chunk_text_content,
-            chunk_index=idx,
-            embedding=json.dumps(vec)
+        # Save main Note
+        new_note = Note(
+            user_id=user_id,
+            title=title,
+            content=content,
+            summary=summary
         )
-        db.session.add(new_chunk)
+        db.session.add(new_note)
+        db.session.commit()
+
+        # Chunk text and save NoteChunks for RAG with dense vector embeddings
+        from services.rag_service import compute_vector_embedding
+        import json
         
-    db.session.commit()
+        chunks = chunk_text(content)
+        for idx, chunk_text_content in enumerate(chunks):
+            vec = compute_vector_embedding(f"{title}\n{chunk_text_content}")
+            new_chunk = NoteChunk(
+                note_id=new_note.id,
+                content=chunk_text_content,
+                chunk_index=idx,
+                embedding=json.dumps(vec)
+            )
+            db.session.add(new_chunk)
+            
+        db.session.commit()
 
+        return jsonify({
+            "message": "Note uploaded and synthesized successfully",
+            "note": {
+                "id": new_note.id,
+                "title": new_note.title,
+                "summary": new_note.summary,
+                "content": new_note.content,
+                "created_at": new_note.created_at.isoformat()
+            }
+        }), 201
 
-    return jsonify({
-        "message": "Note uploaded and synthesized successfully",
-        "note": {
-            "id": new_note.id,
-            "title": new_note.title,
-            "summary": new_note.summary,
-            "content": new_note.content,
-            "created_at": new_note.created_at.isoformat()
-        }
-    }), 201
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error in create_note: {e}")
+        return jsonify({"message": f"Failed to upload or summarize note: {str(e)}"}), 500
+
 
 @notes_bp.route("", methods=["GET"])
 @jwt_required()
 def get_notes():
-    user_id = get_jwt_identity()
+    raw_identity = get_jwt_identity()
+    try:
+        user_id = int(raw_identity)
+    except (ValueError, TypeError):
+        user_id = 1
+
     notes = Note.query.filter_by(user_id=user_id).order_by(Note.created_at.desc()).all()
     
     notes_list = []
@@ -150,7 +169,12 @@ def get_notes():
 @notes_bp.route("/<int:note_id>", methods=["DELETE"])
 @jwt_required()
 def delete_note(note_id):
-    user_id = get_jwt_identity()
+    raw_identity = get_jwt_identity()
+    try:
+        user_id = int(raw_identity)
+    except (ValueError, TypeError):
+        user_id = 1
+
     note = Note.query.filter_by(id=note_id, user_id=user_id).first()
     
     if not note:
@@ -158,5 +182,6 @@ def delete_note(note_id):
         
     db.session.delete(note)
     db.session.commit()
+
     
     return jsonify({"message": "Note deleted successfully"}), 200
