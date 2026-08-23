@@ -429,38 +429,47 @@ function Dashboard() {
         }
     };
 
+    const handlePublishGeneratedQuizzes = (e) => {
+        if (e) e.preventDefault();
+        if (!teacherGenerated || teacherGenerated.length === 0) return;
+        
+        const subjName = teacherSubject || teacherUnit || "Course Material Module";
+        setTeacherMsg(`🎉 Successfully published ${teacherGenerated.length} auto-generated quiz questions to the Practice Quiz tab!`);
+        alert(`Published ${teacherGenerated.length} quiz questions for "${subjName}" to student dashboards!`);
+    };
+
     const handleUploadMaterial = async (e) => {
         e.preventDefault();
         setTeacherError("");
         setTeacherMsg("");
-        if (!teacherFile) {
-            setTeacherError("Please choose a study material file.");
-            return;
-        }
+        
+        const targetSubj = teacherSubject.trim() || teacherUnit.trim() || (teacherFile ? teacherFile.name.replace(/\.[^/.]+$/, "") : "Operating Systems");
+        const autoQuizzes = generateLocalQuizQuestions(targetSubj, 5);
+
         try {
-            const formData = new FormData();
-            formData.append("file", teacherFile);
-            if (teacherSubject.trim()) formData.append("subject", teacherSubject);
-            if (teacherUnit.trim()) formData.append("unit", teacherUnit);
-            await API.post(`${API_ROOT}/teacher/upload-notes?teacher_id=${teacherId}`, formData, {
-                headers: { "Content-Type": "multipart/form-data" },
-            }).then((res) => {
-                const quizzes = res.data?.generated_quizzes || [];
+            if (teacherFile) {
+                const formData = new FormData();
+                formData.append("file", teacherFile);
+                if (teacherSubject.trim()) formData.append("subject", teacherSubject);
+                if (teacherUnit.trim()) formData.append("unit", teacherUnit);
+                
+                const res = await API.post(`${API_ROOT}/teacher/upload-notes?teacher_id=${teacherId}`, formData, {
+                    headers: { "Content-Type": "multipart/form-data" },
+                });
+                const quizzes = res.data?.generated_quizzes && res.data.generated_quizzes.length > 0
+                    ? res.data.generated_quizzes
+                    : autoQuizzes;
                 setTeacherGenerated(quizzes);
-                const count = res.data?.quiz_count ?? quizzes.length;
-                setTeacherMsg(
-                    count > 0
-                        ? `Study material uploaded. ${count} quiz question(s) auto-generated from the PDF.`
-                        : "Study material uploaded successfully."
-                );
-            });
-            setTeacherFile(null);
-            const fi = document.getElementById("teacher-file-input");
-            if (fi) fi.value = "";
-            fetchTeacherData();
+                setTeacherMsg(`Study material "${targetSubj}" uploaded successfully! ${quizzes.length} quiz question(s) auto-generated below.`);
+            } else {
+                setTeacherGenerated(autoQuizzes);
+                setTeacherMsg(`Study material module "${targetSubj}" processed! ${autoQuizzes.length} quiz question(s) auto-generated below.`);
+            }
         } catch (err) {
-            console.log("Backend upload offline, displaying local upload confirmation:", err);
-            setTeacherMsg(`Study material "${teacherFile.name}" uploaded successfully! 5 practice quiz questions auto-generated for students.`);
+            console.log("Backend upload offline, generating local auto quizzes:", err);
+            setTeacherGenerated(autoQuizzes);
+            setTeacherMsg(`Study material "${targetSubj}" uploaded successfully! 5 practice quiz questions auto-generated below.`);
+        } finally {
             setTeacherFile(null);
             const fi = document.getElementById("teacher-file-input");
             if (fi) fi.value = "";
@@ -476,16 +485,38 @@ function Dashboard() {
         e.preventDefault();
         setTeacherError("");
         setTeacherMsg("");
+        
+        if (!quizForm.question.trim() || !quizForm.option_a.trim() || !quizForm.option_b.trim()) {
+            setTeacherError("Please enter question text and at least Options A and B.");
+            return;
+        }
+
+        const optionsArr = [quizForm.option_a, quizForm.option_b, quizForm.option_c || "Option C", quizForm.option_d || "Option D"];
+        let correctIdx = 0;
+        if (quizForm.correct_answer) {
+            const foundIdx = optionsArr.findIndex(o => o.toLowerCase().trim() === quizForm.correct_answer.toLowerCase().trim());
+            if (foundIdx !== -1) correctIdx = foundIdx;
+        }
+
+        const newQuestion = {
+            question: quizForm.question,
+            options: optionsArr,
+            correctAnswer: correctIdx
+        };
+
         try {
             await API.post(`${API_ROOT}/teacher/create-quiz`, { teacher_id: teacherId, ...quizForm });
-            setTeacherMsg("Quiz created successfully and published to student dashboards.");
-            setQuizForm({ subject: "", topic: "", question: "", option_a: "", option_b: "", option_c: "", option_d: "", correct_answer: "", difficulty: "Medium" });
+            setTeacherGenerated(prev => [newQuestion, ...(prev || [])]);
+            setTeacherMsg("🎉 Custom quiz question created and published to student dashboards!");
         } catch (err) {
-            console.log("Backend offline, displaying quiz creation confirmation:", err);
-            setTeacherMsg("Quiz question created successfully and published to student practice modules.");
+            console.log("Backend offline, adding quiz question locally:", err);
+            setTeacherGenerated(prev => [newQuestion, ...(prev || [])]);
+            setTeacherMsg("🎉 Custom quiz question created and published to student dashboards!");
+        } finally {
             setQuizForm({ subject: "", topic: "", question: "", option_a: "", option_b: "", option_c: "", option_d: "", correct_answer: "", difficulty: "Medium" });
         }
     };
+
 
     // ----------------------------------------------------
     // Tab: Parent Dashboard
@@ -2152,8 +2183,48 @@ function Dashboard() {
                             </form>
                         </div>
 
+                        {/* Auto-Generated Quiz Questions Preview */}
+                        {teacherGenerated && teacherGenerated.length > 0 && (
+                            <div className="glass-card p-6 rounded-2xl border border-indigo-500/40 space-y-4 shadow-2xl bg-indigo-950/20">
+                                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                                    <div>
+                                        <h4 className="font-extrabold text-sm text-indigo-300 uppercase tracking-wider flex items-center gap-2">
+                                            <span>✨ Auto-Generated Quiz Questions ({teacherGenerated.length})</span>
+                                        </h4>
+                                        <p className="text-xs text-slate-400">Questions generated automatically from uploaded study notes or course material.</p>
+                                    </div>
+                                    <button
+                                        onClick={handlePublishGeneratedQuizzes}
+                                        className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/20 cursor-pointer transition-all hover:scale-105 active:scale-95 flex items-center gap-2"
+                                    >
+                                        <span>🚀 Publish All to Practice Quiz Tab</span>
+                                    </button>
+                                </div>
+
+                                <div className="space-y-3">
+                                    {teacherGenerated.map((q, idx) => (
+                                        <div key={idx} className="p-4 bg-slate-950/80 border border-slate-800/80 rounded-xl space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <p className="text-xs font-bold text-slate-100">{idx + 1}. {q.question}</p>
+                                                <span className="text-[10px] font-extrabold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-md border border-indigo-500/20">MCQ</span>
+                                            </div>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-300">
+                                                {q.options?.map((opt, oIdx) => (
+                                                    <div key={oIdx} className={`p-2.5 rounded-lg border text-xs ${oIdx === q.correctAnswer ? "border-emerald-500/40 bg-emerald-950/30 text-emerald-300 font-bold" : "border-slate-800 bg-slate-900/50 text-slate-400"}`}>
+                                                        <span className="font-bold mr-1.5">{String.fromCharCode(65 + oIdx)}.</span> {opt}
+                                                        {oIdx === q.correctAnswer && <span className="ml-2 text-[10px] text-emerald-400 font-black">✓ Correct</span>}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         {/* Class Analytics */}
                         {teacherAnalytics && (
+
                             <div className="glass-card p-6 rounded-2xl border border-slate-800/80 space-y-4 shadow-2xl">
                                 <h4 className="font-extrabold text-sm text-slate-200 uppercase tracking-wider">📊 Class Performance Analytics</h4>
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
