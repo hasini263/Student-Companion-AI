@@ -754,7 +754,8 @@ function Dashboard() {
         setSummarizeLoading(true);
         setSelectedNote(null);
 
-        const targetTitle = noteTitle.trim() || (noteFile ? noteFile.name.rsplit ? noteFile.name.rsplit('.', 1)[0] : noteFile.name.replace(/\.[^/.]+$/, "") : "Java Unit 1 Notes");
+        const targetTitle = noteTitle.trim() || (noteFile ? (noteFile.name ? noteFile.name.replace(/\.[^/.]+$/, "") : "Uploaded Note") : "Java Unit 1 Notes");
+
 
         try {
             let res;
