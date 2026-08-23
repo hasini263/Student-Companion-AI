@@ -56,6 +56,60 @@ function Dashboard() {
     const [activeTab, setActiveTab] = useState("home");
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+    // Persistent Local Storage States (Declared FIRST to avoid Temporal Dead Zone ReferenceErrors)
+    const [notes, setNotes] = useState(() => {
+        try {
+            const raw = localStorage.getItem("student_ai_notes");
+            return raw && raw !== "undefined" ? JSON.parse(raw) : [];
+        } catch { return []; }
+    });
+
+    useEffect(() => {
+        try {
+            localStorage.setItem("student_ai_notes", JSON.stringify(notes || []));
+        } catch (e) { console.error("Failed to save notes", e); }
+    }, [notes]);
+
+    const [quizHistory, setQuizHistory] = useState(() => {
+        try {
+            const raw = localStorage.getItem("student_ai_quiz_history");
+            return raw && raw !== "undefined" ? JSON.parse(raw) : [];
+        } catch { return []; }
+    });
+
+    useEffect(() => {
+        try {
+            localStorage.setItem("student_ai_quiz_history", JSON.stringify(quizHistory || []));
+        } catch (e) { console.error("Failed to save quiz history", e); }
+    }, [quizHistory]);
+
+    const [currentPlan, setCurrentPlan] = useState(() => {
+        try {
+            const raw = localStorage.getItem("student_ai_study_plan");
+            return raw && raw !== "undefined" ? JSON.parse(raw) : null;
+        } catch { return null; }
+    });
+
+    useEffect(() => {
+        if (currentPlan) {
+            try {
+                localStorage.setItem("student_ai_study_plan", JSON.stringify(currentPlan));
+            } catch (e) { console.error("Failed to save study plan", e); }
+        }
+    }, [currentPlan]);
+
+    const [chatHistory, setChatHistory] = useState(() => {
+        try {
+            const raw = localStorage.getItem("student_ai_chat_history");
+            return raw && raw !== "undefined" ? JSON.parse(raw) : [];
+        } catch { return []; }
+    });
+
+    useEffect(() => {
+        try {
+            localStorage.setItem("student_ai_chat_history", JSON.stringify(chatHistory || []));
+        } catch (e) { console.error("Failed to save chat history", e); }
+    }, [chatHistory]);
 
     // Global dashboard stats calculated from real persistent user activity
     const [stats, setStats] = useState({
@@ -77,13 +131,13 @@ function Dashboard() {
                 API.get("/planner")
             ]);
             
-            const totalNotes = notesRes.data.length;
-            const quizzesAttempted = quizzesRes.data.length;
+            const totalNotes = Array.isArray(notesRes.data) ? notesRes.data.length : 0;
+            const quizzesAttempted = Array.isArray(quizzesRes.data) ? quizzesRes.data.length : 0;
             
             let averageScore = 0;
             if (quizzesAttempted > 0) {
                 const totalScorePct = quizzesRes.data.reduce((acc, curr) => {
-                    return acc + (curr.score / curr.total_questions) * 100;
+                    return acc + ((curr.score / (curr.total_questions || 5)) * 100);
                 }, 0);
                 averageScore = Math.round(totalScorePct / quizzesAttempted);
             }
@@ -95,12 +149,15 @@ function Dashboard() {
             setStats({ totalNotes, quizzesAttempted, averageScore, studyPlanSubjects });
         } catch (err) {
             console.log("Backend stats API offline, computing stats from persistent user storage:", err);
-            const totalNotes = notes.length;
-            const quizzesAttempted = quizHistory.length;
+            const safeNotes = Array.isArray(notes) ? notes : [];
+            const safeQuizHist = Array.isArray(quizHistory) ? quizHistory : [];
+            
+            const totalNotes = safeNotes.length;
+            const quizzesAttempted = safeQuizHist.length;
             let averageScore = 0;
             if (quizzesAttempted > 0) {
-                const totalScorePct = quizHistory.reduce((acc, curr) => {
-                    return acc + (curr.score / (curr.total_questions || 5)) * 100;
+                const totalScorePct = safeQuizHist.reduce((acc, curr) => {
+                    return acc + ((curr.score / (curr.total_questions || 5)) * 100);
                 }, 0);
                 averageScore = Math.round(totalScorePct / quizzesAttempted);
             }
@@ -122,21 +179,12 @@ function Dashboard() {
         navigate("/");
     };
 
+
     // ----------------------------------------------------
     // Tab 2: AI Doubt Assistant (Chat with RAG)
     // ----------------------------------------------------
     const [chatQuery, setChatQuery] = useState("");
-    const [chatHistory, setChatHistory] = useState(() => {
-        try {
-            return JSON.parse(localStorage.getItem("student_ai_chat_history") || "[]");
-        } catch { return []; }
-    });
 
-    useEffect(() => {
-        try {
-            localStorage.setItem("student_ai_chat_history", JSON.stringify(chatHistory));
-        } catch (e) { console.error("Failed to save chat history to localStorage", e); }
-    }, [chatHistory]);
 
     const [chatLoading, setChatLoading] = useState(false);
     const [latestRagContext, setLatestRagContext] = useState([]);
@@ -714,17 +762,7 @@ function Dashboard() {
     // ----------------------------------------------------
     // Tab 3: Notes Summarizer
     // ----------------------------------------------------
-    const [notes, setNotes] = useState(() => {
-        try {
-            return JSON.parse(localStorage.getItem("student_ai_notes") || "[]");
-        } catch { return []; }
-    });
 
-    useEffect(() => {
-        try {
-            localStorage.setItem("student_ai_notes", JSON.stringify(notes));
-        } catch (e) { console.error("Failed to save notes to localStorage", e); }
-    }, [notes]);
 
     const [noteTitle, setNoteTitle] = useState("");
     const [noteContent, setNoteContent] = useState("");
@@ -867,17 +905,7 @@ function Dashboard() {
     const [selectedAnswers, setSelectedAnswers] = useState({}); // { questionIndex: optionIndex }
     const [quizSubmitted, setQuizSubmitted] = useState(false);
     const [quizResult, setQuizResult] = useState(null); // score, total, savedStatus
-    const [quizHistory, setQuizHistory] = useState(() => {
-        try {
-            return JSON.parse(localStorage.getItem("student_ai_quiz_history") || "[]");
-        } catch { return []; }
-    });
 
-    useEffect(() => {
-        try {
-            localStorage.setItem("student_ai_quiz_history", JSON.stringify(quizHistory));
-        } catch (e) { console.error("Failed to save quiz history to localStorage", e); }
-    }, [quizHistory]);
 
     const fetchQuizHistory = async () => {
         try {
@@ -1031,20 +1059,8 @@ function Dashboard() {
     const [plannerSubjects, setPlannerSubjects] = useState("");
     const [plannerDates, setPlannerDates] = useState("");
     const [plannerFile, setPlannerFile] = useState(null);
-    const [currentPlan, setCurrentPlan] = useState(() => {
-        try {
-            return JSON.parse(localStorage.getItem("student_ai_study_plan") || "null");
-        } catch { return null; }
-    });
     const [plannerLoading, setPlannerLoading] = useState(false);
 
-    useEffect(() => {
-        if (currentPlan) {
-            try {
-                localStorage.setItem("student_ai_study_plan", JSON.stringify(currentPlan));
-            } catch (e) { console.error("Failed to save study plan to localStorage", e); }
-        }
-    }, [currentPlan]);
 
     const fetchStudyPlan = async () => {
         try {
