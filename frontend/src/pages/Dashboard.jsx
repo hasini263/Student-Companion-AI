@@ -444,21 +444,58 @@ function Dashboard() {
     }, [chatHistory]);
 
 
-    const generateLocalChatReply = (query, notesList) => {
+    const generateLocalChatReply = (query, notesList, currentSelectedNote) => {
         const qClean = query.toLowerCase().trim().replace(/[?!.]/g, "");
+        const queryWords = qClean.split(/\s+/).filter(w => w.length > 2);
         const greetings = ["hi", "hello", "hey", "greetings", "good morning", "good afternoon", "good evening", "yo", "haii", "hai", "hay", "hii", "hiii"];
         
         if (greetings.includes(qClean) || (qClean.length <= 4 && greetings.some(g => qClean.startsWith(g)))) {
             return "Hello Lakkamraju Sri Hasini! 👋 I am your Student Companion AI Assistant. How can I help you with your studies, Java concepts, Operating Systems, or exam preparation today?";
         }
 
-        // 1. Search uploaded notes for RAG match
+        // Combine selectedNote + notesList for document RAG search
+        const allDocs = [];
+        if (currentSelectedNote) allDocs.push(currentSelectedNote);
         if (notesList && notesList.length > 0) {
-            for (const note of notesList) {
-                const nContent = (note.content || "").toLowerCase();
-                const nTitle = (note.title || "").toLowerCase();
-                if (nTitle.includes(qClean) || qClean.split(" ").some(w => w.length > 3 && nContent.includes(w))) {
-                    return `### 📚 Answer from **${note.title}**\n\nHere is the explanation extracted from your uploaded study document (**${note.title}**):\n\n${(note.content || note.summary || "").slice(0, 450)}...\n\n---\n*Source: Synthesized directly from your document \`${note.title}\`.*`;
+            notesList.forEach(n => {
+                if (!allDocs.some(d => d.id === n.id)) allDocs.push(n);
+            });
+        }
+
+        // 1. Search all uploaded PDF documents
+        if (allDocs.length > 0) {
+            for (const doc of allDocs) {
+                const fullText = (doc.content || "") + "\n\n" + (doc.summary || "");
+                const title = doc.title || "Uploaded PDF Note";
+                
+                // Break into paragraphs/lines
+                const paragraphs = fullText.split(/\n+/).map(p => p.trim()).filter(p => p.length > 12);
+                
+                // Find matching paragraphs containing query words
+                const matchedParas = paragraphs.filter(p => {
+                    const pLower = p.toLowerCase();
+                    return queryWords.some(w => pLower.includes(w));
+                });
+
+                if (matchedParas.length > 0) {
+                    const excerpt = matchedParas.slice(0, 4).join("\n\n");
+                    // Inject into RAG Context state so it displays in RAG Context Retrieval sidebar
+                    setLatestRagContext([{
+                        title: title,
+                        content: matchedParas[0],
+                        score: 0.95
+                    }]);
+                    
+                    return `### 📚 Answer from **${title}**\n\nHere is the exact explanation extracted directly from your uploaded PDF notes (**${title}**):\n\n${excerpt}\n\n---\n*Source: Synthesized directly from your uploaded PDF file (\`${title}\`).*`;
+                } else if (allDocs.length > 0 && (qClean.includes("pdf") || qClean.includes("note") || qClean.includes("summary") || qClean.includes("unit"))) {
+                    // Fallback to top excerpt of the uploaded PDF note if user asks about the PDF
+                    const topExcerpt = paragraphs.slice(0, 3).join("\n\n") || (doc.summary || fullText.slice(0, 400));
+                    setLatestRagContext([{
+                        title: title,
+                        content: topExcerpt,
+                        score: 0.88
+                    }]);
+                    return `### 📚 Summary Answer from **${title}**\n\nHere is the relevant section from your uploaded PDF document (**${title}**):\n\n${topExcerpt}\n\n---\n*Source: Extracted directly from uploaded document \`${title}\`.*`;
                 }
             }
         }
@@ -478,6 +515,7 @@ function Dashboard() {
 
         return `### 🎓 Explanation for **"${query}"**\n\nHere is the academic breakdown for your question:\n\n1. **Core Concept**: Understanding the fundamental principles governing **${query}**.\n2. **Key Mechanism**: How this concept operates and is applied in practical software and system design.\n3. **Study Recommendation**: Review key formulas, definitions, and code syntax prior to exam assessments!`;
     };
+
 
     const handleSendChat = async (e) => {
         e.preventDefault();
@@ -507,8 +545,9 @@ function Dashboard() {
             }
         } catch (err) {
             console.log("Backend chat API offline/unreachable, generating smart response locally:", err);
-            const smartReply = generateLocalChatReply(currentQuery, notes);
+            const smartReply = generateLocalChatReply(currentQuery, notes, selectedNote);
             const fallbackMsg = {
+
                 id: userMsgId,
                 query: currentQuery,
                 response: smartReply,
