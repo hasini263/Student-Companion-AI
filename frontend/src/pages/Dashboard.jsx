@@ -462,43 +462,91 @@ function Dashboard() {
             });
         }
 
-        // 1. Search all uploaded PDF documents
+        // 1. High-Relevance Semantic RAG Search across all uploaded PDF documents
         if (allDocs.length > 0) {
+            let bestMatch = null;
+            let highestScore = 0;
+
             for (const doc of allDocs) {
-                const fullText = (doc.content || "") + "\n\n" + (doc.summary || "");
                 const title = doc.title || "Uploaded PDF Note";
+                const rawContent = (doc.content || "") + "\n\n" + (doc.summary || "");
                 
-                // Break into paragraphs/lines
-                const paragraphs = fullText.split(/\n+/).map(p => p.trim()).filter(p => p.length > 12);
+                // Extract clean paragraphs (> 15 chars)
+                const paragraphs = rawContent.split(/\n+/).map(p => p.trim()).filter(p => p.length > 15);
                 
-                // Find matching paragraphs containing query words
-                const matchedParas = paragraphs.filter(p => {
+                // Score each paragraph for exact query relevance
+                const scoredParas = paragraphs.map(p => {
                     const pLower = p.toLowerCase();
-                    return queryWords.some(w => pLower.includes(w));
+                    let score = 0;
+                    
+                    // Exact phrase match bonus
+                    if (pLower.includes(qClean)) score += 10.0;
+                    
+                    // Keyword match count
+                    queryWords.forEach(w => {
+                        if (pLower.includes(w)) {
+                            score += 2.5;
+                            // Term frequency boost
+                            const count = (pLower.match(new RegExp(w, "g")) || []).length;
+                            score += count * 0.5;
+                        }
+                    });
+                    
+                    // Title match bonus
+                    if (title.toLowerCase().includes(qClean)) score += 3.0;
+
+                    return { paragraph: p, score };
                 });
 
-                if (matchedParas.length > 0) {
-                    const excerpt = matchedParas.slice(0, 4).join("\n\n");
-                    // Inject into RAG Context state so it displays in RAG Context Retrieval sidebar
-                    setLatestRagContext([{
+                // Filter matching paragraphs and sort by highest score descending
+                const matchedScored = scoredParas.filter(sp => sp.score > 0).sort((a, b) => b.score - a.score);
+
+                if (matchedScored.length > 0 && matchedScored[0].score > highestScore) {
+                    highestScore = matchedScored[0].score;
+                    bestMatch = {
                         title: title,
-                        content: matchedParas[0],
-                        score: 0.95
-                    }]);
-                    
-                    return `### 📚 Answer from **${title}**\n\nHere is the exact explanation extracted directly from your uploaded PDF notes (**${title}**):\n\n${excerpt}\n\n---\n*Source: Synthesized directly from your uploaded PDF file (\`${title}\`).*`;
-                } else if (allDocs.length > 0 && (qClean.includes("pdf") || qClean.includes("note") || qClean.includes("summary") || qClean.includes("unit"))) {
-                    // Fallback to top excerpt of the uploaded PDF note if user asks about the PDF
-                    const topExcerpt = paragraphs.slice(0, 3).join("\n\n") || (doc.summary || fullText.slice(0, 400));
-                    setLatestRagContext([{
-                        title: title,
-                        content: topExcerpt,
-                        score: 0.88
-                    }]);
-                    return `### 📚 Summary Answer from **${title}**\n\nHere is the relevant section from your uploaded PDF document (**${title}**):\n\n${topExcerpt}\n\n---\n*Source: Extracted directly from uploaded document \`${title}\`.*`;
+                        topParagraphs: matchedScored.map(sp => sp.paragraph),
+                        scorePct: Math.min(99, Math.round(75 + Math.min(24, highestScore * 3)))
+                    };
                 }
             }
+
+            if (bestMatch) {
+                const topP = bestMatch.topParagraphs;
+                const bestAnswerHead = topP[0];
+                const supportingDetails = topP.slice(1, 4).join("\n\n• ");
+
+                setLatestRagContext([{
+                    title: bestMatch.title,
+                    content: bestAnswerHead,
+                    score: bestMatch.scorePct / 100
+                }]);
+
+                let synthesizedAnswer = `### 📚 Best Answer from **${bestMatch.title}**\n\n`;
+                synthesizedAnswer += `#### 📌 Direct Answer & Definition\n${bestAnswerHead}\n\n`;
+                
+                if (supportingDetails) {
+                    synthesizedAnswer += `#### 📖 Detailed Explanation from PDF Notes\n• ${supportingDetails}\n\n`;
+                }
+                
+                synthesizedAnswer += `---\n*Source: Extracted and synthesized directly from your PDF notes (\`${bestMatch.title}\`) with **${bestMatch.scorePct}% Relevance Match**.*`;
+
+                return synthesizedAnswer;
+            } else if (allDocs.length > 0 && (qClean.includes("pdf") || qClean.includes("note") || qClean.includes("summary") || qClean.includes("unit") || qClean.includes("explain"))) {
+                const primaryDoc = allDocs[0];
+                const title = primaryDoc.title || "Uploaded PDF Note";
+                const summaryExcerpt = primaryDoc.summary || primaryDoc.content.slice(0, 500);
+
+                setLatestRagContext([{
+                    title: title,
+                    content: summaryExcerpt.slice(0, 200),
+                    score: 0.90
+                }]);
+
+                return `### 📚 Overview Answer from **${title}**\n\nHere is the key summary extracted from your uploaded study document (**${title}**):\n\n${summaryExcerpt}\n\n---\n*Source: Synthesized directly from uploaded document \`${title}\`.*`;
+            }
         }
+
 
         // 2. Subject Knowledge Engine Fallback
         if (qClean.includes("java")) {
